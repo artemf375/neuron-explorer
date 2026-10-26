@@ -532,7 +532,7 @@ function syncEdge() {
   const on = focusEl.classList.contains("on"), col = focusEl.classList.contains("collapsed"), f = state.focus;
   const t = $("#focus-tab");
   t.classList.toggle("on", !on || col);
-  t.textContent = on && col && f && f.kind !== "head" ? `‹ ${f.kind === "random" ? "r" : "N"}${f.n}` : "‹ claude";
+  t.textContent = on && col && f && f.kind !== "head" ? `‹ ${f.kind === "random" ? "r" : "N"}${f.n}` : on && col && curTab() === "chat" ? "‹ chat" : "‹ claude";
 }
 $("#list-hide").onclick = () => setListHidden(true);
 $("#list-tab").onclick = () => setListHidden(false);
@@ -541,10 +541,12 @@ $("#focus-tab").onclick = () => focusEl.classList.contains("on") ? setFocusColla
 
 // ---------- focus panel ----------
 const focusEl = $("#focus");
-// closing the neuron keeps the panel up when Claude is the open tab
-$("#f-close").onclick = () => { flushName(); if (running) running.abort(); state.focus = null; $("#list").classList.remove("has-focus");
+// Chat and Claude don't depend on the open neuron: while one of them is showing, the panel stays up without one
+const keepsPanel = () => curTab() === "claude" || curTab() === "chat";
+$("#f-close").onclick = () => { flushName(); state.focus = null; $("#list").classList.remove("has-focus");
   map.selectHead(null); state.headInfo = null; state.nheads = null; $("#f-name").style.display = ""; lightHeads(state.inf.pos);
-  if (curTab() === "claude") syncTabs(); else focusEl.classList.remove("on");
+  $("#c-lens").innerHTML = ""; renderRack();
+  if (keepsPanel()) syncTabs(); else focusEl.classList.remove("on");
   setFocusCollapsed(false); map.select(null); refreshWeb(); renderAgentActions(); scatter.select(null, null); saveFocus(); renderList(); };
 document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => setTab(b.dataset.tab));
 const tabBtn = t => $(`#tabs button[data-tab="${t}"]`);
@@ -558,11 +560,10 @@ function setTab(t) {
 }
 // a tab that changed while another was showing gets a dot until opened
 function markFresh(t) { if (curTab() !== t) tabBtn(t).classList.add("fresh"); }
-// neuron tabs show while a neuron is open (Chat for real neurons only); Claude always
+// neuron tabs show while a neuron is open; Chat and Claude always
 function syncTabs() {
   const f = state.focus?.kind === "head" ? null : state.focus;
   for (const t of ["examples", "details"]) tabBtn(t).style.display = f ? "" : "none";
-  tabBtn("chat").style.display = f && f.kind === "neuron" ? "" : "none";
   if (tabBtn(curTab()).style.display === "none") setTab(f ? "examples" : "claude");
 }
 function openClaude() {
@@ -626,7 +627,8 @@ async function openHead(layer, head) {
   if ($("#list").classList.contains("hidden")) setListHidden(false);
   $("#f-id").textContent = `L${layer} h${head}`; $("#f-rank").textContent = "";
   $("#f-name").style.display = "none";
-  if (curTab() === "claude") syncTabs(); else { focusEl.classList.remove("on"); syncTabs(); }
+  $("#c-lens").innerHTML = ""; renderRack();
+  if (keepsPanel()) syncTabs(); else { focusEl.classList.remove("on"); syncTabs(); }
   syncEdge(); updateInsets();
   refreshWeb(); renderAgentActions();
   shadeTokens(tokHover ?? state.inf.pos);
@@ -932,7 +934,10 @@ $("#c-form").addEventListener("submit", async e => {
   if (running) { running.abort(); return; }
   const f = state.focus;
   const text = $("#c-input").value.trim() || $("#c-input").placeholder;
-  if (state.chat.dir === "reads") { if (f) runReads(f, text); return; }
+  if (state.chat.dir === "reads") {
+    if (f && f.kind === "neuron") runReads(f, text); else $("#c-reads").textContent = "Open a neuron to see how it reads your text.";
+    return;
+  }
   const neurons = steerBody();
   const history = state.thread.filter(t => !t.error).map(t => ({ user: t.user, reply: t.reply }));
   const turn = { user: text, reply: "", neurons, live: true };
