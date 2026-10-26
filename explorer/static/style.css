@@ -188,7 +188,8 @@ body.list-hidden #layer-back { left: 56px; }
   padding: 7px 11px; white-space: pre-wrap; }
 .turn .bot { max-width: 92%; }
 .turn .recipe { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 5px; text-align: left; }
-.turn .recipe:hover .rc { color: var(--ink); }
+button.rc:hover { color: var(--ink); background: rgba(255,255,255,0.12); }
+.rc.load { color: var(--faint); background: none; }
 .rc { font-size: 11px; color: var(--dim); border-radius: 3px; padding: 1px 6px; background: var(--raise); }
 .rc.up { box-shadow: inset 2px 0 0 var(--up); } .rc.down { box-shadow: inset 2px 0 0 var(--down); }
 .turn .reply { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.5; }

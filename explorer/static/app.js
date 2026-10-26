@@ -894,23 +894,26 @@ renderRack();
 let running = null;
 state.thread = [];
 const recipeHTML = ns => ns.length
-  ? ns.map(x => { const k = { mode: x.mode, v: { [x.mode]: x.dose } }; return `<span class="rc ${pull(k) > 0 ? "up" : "down"}"><span class="mono">L${x.layer} N${x.n}</span> ${fmtVal(k)}</span>`; }).join("")
+  ? ns.map(x => { const k = { mode: x.mode, v: { [x.mode]: x.dose } }; return `<button type="button" class="rc ${pull(k) > 0 ? "up" : "down"}" data-l="${x.layer}" data-n="${x.n}" title="open L${x.layer} N${x.n}"><span class="mono">L${x.layer} N${x.n}</span> ${fmtVal(k)}</button>`; }).join("")
+    + `<button type="button" class="rc load" title="load this steering into the rack">↺ load</button>`
   : `<span class="rc">plain model</span>`;
 function renderThread() {
   const el = $("#c-thread");
   el.innerHTML = state.thread.length ? state.thread.map((t, i) => `<div class="turn" data-i="${i}">
     <div class="user">${esc(t.user)}</div>
     <div class="bot">
-      <button type="button" class="recipe" title="load this steering into the rack">${recipeHTML(t.neurons)}</button>
+      <div class="recipe">${recipeHTML(t.neurons)}</div>
       <div class="reply${t.live ? " live" : ""}">${esc(t.reply)}</div>
       ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}
     </div></div>`).join("")
     : `<div class="c-empty dim">Set the dials below, then send a message. Every reply is generated with the steering shown above it.</div>`;
   el.scrollTop = el.scrollHeight;
 }
-// a turn's recipe loads back into the rack: its neurons at those doses, everything else muted
+// a turn's recipe: a neuron opens it; "load" puts the recipe back into the rack (its neurons at those doses, the rest muted)
 $("#c-thread").addEventListener("click", e => {
-  const b = e.target.closest(".recipe"); if (!b) return;
+  const rc = e.target.closest(".recipe .rc[data-l]");
+  if (rc) { const l = +rc.dataset.l, n = +rc.dataset.n; if (!isFocus(l, n, "neuron")) openNeuron(l, n); return; }
+  const b = e.target.closest(".recipe .load"); if (!b) return;
   const t = state.thread[+b.closest(".turn").dataset.i];
   for (const k of state.chat.rack) k.on = false;
   for (const x of t.neurons) {
