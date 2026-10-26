@@ -12,9 +12,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;",
 const fmtDose = d => (d > 0 ? "+" : d < 0 ? "−" : "") + Math.abs(d);
 
 let agentSelecting = false, agentMarked = false;  // Claude's selections and marks (see agentUi); declared early, openNeuron reads them on load
-const state = { layer: null, units: {}, unitMap: {}, focus: null, view: "map", chat: { mode: "add", dir: "writes", dose: { add: 0.8, mul: 2 } } };
-const ADD_STEPS = [...Array.from({ length: 30 }, (_, i) => +((i + 1) * 0.05).toFixed(2)), 1.75, 2, 2.5, 3, 4, 5];
-const MUL_STEPS = [...Array.from({ length: 9 }, (_, i) => i * 0.5), 5, 6, 8, 12, 16];
+const state = { layer: null, units: {}, unitMap: {}, focus: null, view: "map", chat: { dir: "writes" } };
 
 const index = await api("/api/index");
 const arch = index.arch;
@@ -574,7 +572,6 @@ function openClaude() {
 async function openNeuron(layer, n, kind = "neuron", push = true, fly = true) {
   if (!agentSelecting) clearAgentMarks();
   flushName();
-  if (running) running.abort();
   state.focus = { layer, n, kind };
   map.selectHead(null); state.headInfo = null; state.nheads = null; $("#f-name").style.display = ""; lightHeads(state.inf.pos);
   if (map.layerMode !== null && map.layerMode !== layer) map.enterLayer(layer);
@@ -586,12 +583,12 @@ async function openNeuron(layer, n, kind = "neuron", push = true, fly = true) {
   setNameField(state.unitMap[layer]?.get(n)?.name || "");
   $("#f-name").disabled = kind !== "neuron";
   $("#tab-examples").innerHTML = ""; $("#tab-details").innerHTML = "";
-  state.thread = []; renderThread(); renderSet(); $("#c-reads").innerHTML = ""; $("#c-lens").innerHTML = "";
+  renderRack(); $("#c-reads").innerHTML = ""; $("#c-lens").innerHTML = "";
   syncTabs();
   if (layer !== state.layer) await setLayer(layer);
   if (!isFocus(layer, n, kind)) return;
   setNameField(state.unitMap[layer]?.get(n)?.name || "");
-  renderList();
+  renderList(); renderRack();
   if (kind === "neuron") { map.select(layer, n, fly); scatter.select(layer, n); loadNeuronHeads(layer, n); }
   refreshWeb(); renderAgentActions();
   const u = await api(`/api/unit?layer=${layer}&n=${n}&kind=${kind}`);
@@ -622,7 +619,6 @@ async function loadNeuronHeads(layer, n) {
 async function openHead(layer, head) {
   if (!agentSelecting) clearAgentMarks();
   flushName();
-  if (running) running.abort();
   state.focus = { layer, n: head, kind: "head" };
   saveFocus();
   map.select(null); scatter.select(null, null); map.selectHead(layer, head);
@@ -781,121 +777,169 @@ $("#f-name").addEventListener("input", () => {
 });
 
 // ---------- chat ----------
-const doseEl = $("#c-dose");
-function showDose() { doseEl.value = state.chat.mode === "mul" ? `×${state.chat.dose.mul}` : state.chat.dose.add; renderSet(); }
-doseEl.addEventListener("change", () => {
-  const v = parseFloat(doseEl.value.replace(/[×x*]/g, ""));
-  if (Number.isFinite(v) && v >= 0) state.chat.dose[state.chat.mode] = v;
-  showDose();
+// one conversation with the model, steered by the rack: each neuron gets its own dial and is pushed exactly as set,
+// all at once (add: signed dose in units of the layer's median residual norm; ×: the activation's multiplier, 0 ablates,
+// −1 flips). Nothing in the rack (or everything muted) is the plain model. The rack and the thread stay while you browse.
+const DIAL = { add: { min: -3, max: 3, step: 0.05, rest: 0, start: 0.8 }, mul: { min: -2, max: 6, step: 0.1, rest: 1, start: 2 } };
+const keyOf = (l, n) => `${l}/${n}`;
+const unitName = (l, n) => state.unitMap[l]?.get(n)?.name || "";
+state.chat.rack = [];
+try { state.chat.rack = JSON.parse(localStorage.getItem("explorer.steerRack") || "[]"); } catch {}
+const saveRack = () => { try { localStorage.setItem("explorer.steerRack", JSON.stringify(state.chat.rack)); } catch {} };
+const knobOf = (l, n) => state.chat.rack.find(k => k.layer === l && k.n === n);
+const clampDial = (mode, v) => Math.min(DIAL[mode].max, Math.max(DIAL[mode].min, v));
+const round = v => +v.toFixed(3);
+// > 0 pushes the neuron's own direction harder, < 0 weakens or reverses it, 0 leaves it alone
+const pull = k => k.mode === "mul" ? k.v.mul - 1 : k.v.add;
+const fmtVal = k => k.mode === "mul" ? `×${k.v.mul}` : `${k.v.add > 0 ? "+" : k.v.add < 0 ? "−" : ""}${Math.abs(k.v.add)}`;
+const activeKnobs = () => state.chat.rack.filter(k => k.on && pull(k) !== 0);
+const steerBody = () => activeKnobs().map(k => ({ layer: k.layer, n: k.n, dose: k.v[k.mode], mode: k.mode }));
+
+function addKnob(layer, n) {
+  if (!knobOf(layer, n)) state.chat.rack.push({ layer, n, name: unitName(layer, n), on: true, mode: "add", v: { add: DIAL.add.start, mul: DIAL.mul.start } });
+  saveRack(); renderRack();
+}
+function knobHTML(k) {
+  const d = DIAL[k.mode], v = k.v[k.mode], p = pull(k), f = state.focus;
+  const pct = x => ((clampDial(k.mode, x) - d.min) / (d.max - d.min) * 100).toFixed(1);
+  const open = f && f.kind === "neuron" && f.layer === k.layer && f.n === k.n;
+  const tone = p > 0 ? "up" : p < 0 ? "down" : "rest";
+  const name = k.name || unitName(k.layer, k.n);
+  return `<div class="knob ${tone}${k.on ? "" : " off"}${open ? " open" : ""}" data-k="${keyOf(k.layer, k.n)}" style="--a:${pct(Math.min(d.rest, v))}%;--b:${pct(Math.max(d.rest, v))}%;--r:${pct(d.rest)}%">
+    <button type="button" class="tog" title="${k.on ? "mute" : "unmute"}" aria-label="${k.on ? "mute" : "unmute"} L${k.layer} N${k.n}" aria-pressed="${k.on}"></button>
+    <button type="button" class="id" title="${open ? "the open neuron" : "open this neuron"}"><span class="mono">L${k.layer} N${k.n}</span>${name ? `<span class="nm">${esc(name)}</span>` : ""}</button>
+    <input type="range" class="sl" min="${d.min}" max="${d.max}" step="${d.step}" value="${clampDial(k.mode, v)}" aria-label="dose for L${k.layer} N${k.n}" title="double-click: no push">
+    <input class="val mono" value="${fmtVal(k)}" inputmode="decimal" spellcheck="false" aria-label="dose value for L${k.layer} N${k.n}" title="type any value · ↑↓ step · double-click: no push">
+    <span class="seg mode" title="add: push along the neuron's direction · ×: scale its activation"><button type="button" data-m="add" class="${k.mode === "add" ? "on" : ""}">add</button><button type="button" data-m="mul" class="${k.mode === "mul" ? "on" : ""}">×</button></span>
+    <button type="button" class="rm" aria-label="remove L${k.layer} N${k.n}" title="remove">×</button>
+  </div>`;
+}
+function renderSummary() {
+  const a = activeKnobs();
+  $("#c-summary").textContent = a.length ? `${a.length} neuron${a.length === 1 ? "" : "s"} pushed` : "plain model";
+  $("#c-summary").classList.toggle("live", a.length > 0);
+}
+function renderRack() {
+  const f = state.focus, rack = state.chat.rack;
+  for (const k of rack) k.name = unitName(k.layer, k.n) || k.name;
+  $("#c-knobs").innerHTML = rack.length ? rack.map(knobHTML).join("")
+    : `<div class="rack-empty dim">No neurons yet. Add the open one, or type an id like L22 N2742.</div>`;
+  const canAdd = f && f.kind === "neuron" && !knobOf(f.layer, f.n);
+  $("#c-add-open").style.display = canAdd ? "" : "none";
+  if (canAdd) $("#c-add-open").innerHTML = `+ steer <span class="mono">L${f.layer} N${f.n}</span>${unitName(f.layer, f.n) ? ` <span class="dim">${esc(unitName(f.layer, f.n))}</span>` : ""}`;
+  $("#c-reset").disabled = !rack.length;
+  renderSummary();
+}
+// redraws one knob in place (keeps the slider being dragged alive: only its siblings and colours change)
+function refreshKnob(el, k, keepSlider) {
+  const d = DIAL[k.mode], v = k.v[k.mode], p = pull(k);
+  const pct = x => ((clampDial(k.mode, x) - d.min) / (d.max - d.min) * 100).toFixed(1);
+  el.style.setProperty("--a", `${pct(Math.min(d.rest, v))}%`); el.style.setProperty("--b", `${pct(Math.max(d.rest, v))}%`);
+  el.classList.remove("up", "down", "rest"); el.classList.add(p > 0 ? "up" : p < 0 ? "down" : "rest");
+  if (!keepSlider) el.querySelector(".sl").value = clampDial(k.mode, v);
+  if (document.activeElement !== el.querySelector(".val")) el.querySelector(".val").value = fmtVal(k);
+  saveRack(); renderSummary();
+}
+const knobAt = el => { const c = el.closest(".knob"); if (!c) return [null, null]; const [l, n] = c.dataset.k.split("/").map(Number); return [c, knobOf(l, n)]; };
+function setVal(el, k, v, keepSlider) { k.v[k.mode] = round(v); refreshKnob(el, k, keepSlider); }
+function parseVal(s) { const v = parseFloat(s.replace(/[×x*\s+]/g, "").replace("−", "-")); return Number.isFinite(v) ? v : null; }
+
+$("#c-knobs").addEventListener("input", e => {
+  const [el, k] = knobAt(e.target); if (!k || !e.target.matches(".sl")) return;
+  setVal(el, k, +e.target.value, true);
 });
-document.querySelectorAll("#c-mode button").forEach(b => b.onclick = () => {
-  state.chat.mode = b.dataset.m;
-  document.querySelectorAll("#c-mode button").forEach(x => x.classList.toggle("on", x === b)); showDose();
+$("#c-knobs").addEventListener("change", e => {
+  const [el, k] = knobAt(e.target); if (!k || !e.target.matches(".val")) return;
+  const v = parseVal(e.target.value);
+  if (v !== null) k.v[k.mode] = round(v);
+  e.target.value = fmtVal(k); refreshKnob(el, k);
 });
+$("#c-knobs").addEventListener("keydown", e => {
+  const [el, k] = knobAt(e.target); if (!k || !e.target.matches(".val")) return;
+  if (e.key === "Enter") { e.preventDefault(); e.target.blur(); return; }
+  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+  e.preventDefault();
+  const step = DIAL[k.mode].step * (e.shiftKey ? 10 : 1) * (e.key === "ArrowUp" ? 1 : -1);
+  k.v[k.mode] = round(k.v[k.mode] + step); e.target.value = fmtVal(k); refreshKnob(el, k);
+});
+$("#c-knobs").addEventListener("dblclick", e => {
+  const [el, k] = knobAt(e.target); if (!k || !e.target.matches(".sl, .val")) return;
+  setVal(el, k, DIAL[k.mode].rest); el.querySelector(".val").value = fmtVal(k);
+});
+$("#c-knobs").addEventListener("click", e => {
+  const [el, k] = knobAt(e.target); if (!k) return;
+  if (e.target.closest(".rm")) { state.chat.rack = state.chat.rack.filter(x => x !== k); saveRack(); renderRack(); }
+  else if (e.target.closest(".tog")) { k.on = !k.on; saveRack(); renderRack(); }
+  else if (e.target.closest(".mode button")) { k.mode = e.target.closest("button").dataset.m; saveRack(); renderRack(); }
+  else if (e.target.closest(".id") && !isFocus(k.layer, k.n, "neuron")) openNeuron(k.layer, k.n);
+});
+$("#c-add-open").onclick = () => { const f = state.focus; if (f && f.kind === "neuron") addKnob(f.layer, f.n); };
+$("#c-pin").addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  const m = e.target.value.match(/L?\s*(\d+)\D+N?\s*(\d+)/i);
+  if (m) { addKnob(+m[1], +m[2]); e.target.value = ""; }
+});
+$("#c-reset").onclick = () => { for (const k of state.chat.rack) k.v[k.mode] = DIAL[k.mode].rest; saveRack(); renderRack(); };
 document.querySelectorAll("#c-dir button").forEach(b => b.onclick = () => {
   state.chat.dir = b.dataset.d;
   document.querySelectorAll("#c-dir button").forEach(x => x.classList.toggle("on", x === b));
   $("#tab-chat").classList.toggle("reads", b.dataset.d === "reads");
-  $("#c-input").placeholder = b.dataset.d === "reads" ? "text to read" : "Who are you?";
+  $("#c-input").placeholder = b.dataset.d === "reads" ? "text to read: the open neuron's activation, with the rack applied" : "Who are you?";
+  $("#c-go").textContent = b.dataset.d === "reads" ? "read" : "send";
 });
-function step(dir) {
-  const steps = state.chat.mode === "mul" ? MUL_STEPS : ADD_STEPS, key = state.chat.mode;
-  // step to the next value in the ladder above or below the current dose (typed values land between steps)
-  const v = state.chat.dose[key];
-  const next = dir > 0 ? steps.find(x => x > v + 1e-9) : [...steps].reverse().find(x => x < v - 1e-9);
-  if (next !== undefined) state.chat.dose[key] = next;
-  showDose();
-}
-$("#c-minus").onclick = () => step(-1); $("#c-plus").onclick = () => step(1);
-showDose();
-
-// the steer set: the open neuron is always pushed; pinned neurons are pushed with it and stay pinned while you browse.
-// a pinned neuron uses the shared dose unless it has its own (one per mode; in add mode a negative dose pushes it the
-// other way)
-state.chat.pins = [];
-try { state.chat.pins = JSON.parse(localStorage.getItem("explorer.steerPins") || "[]"); } catch {}
-const savePins = () => { try { localStorage.setItem("explorer.steerPins", JSON.stringify(state.chat.pins)); } catch {} };
-const pinOf = (l, n) => state.chat.pins.find(p => p.layer === l && p.n === n);
-function addPin(layer, n) {
-  if (!pinOf(layer, n)) { state.chat.pins.push({ layer, n, dose: { add: null, mul: null } }); savePins(); }
-  renderSet();
-}
-// what /api/steer pushes: the open neuron first, then the other pins
-function steerNeurons() {
-  const f = state.focus, mode = state.chat.mode, shared = state.chat.dose[mode];
-  const all = [...(pinOf(f.layer, f.n) ? [] : [{ layer: f.layer, n: f.n, dose: {} }]), ...state.chat.pins];
-  all.sort((a, b) => (b.layer === f.layer && b.n === f.n) - (a.layer === f.layer && a.n === f.n));
-  return all.map(p => ({ layer: p.layer, n: p.n, dose: p.dose[mode] ?? shared, mode }));
-}
-function renderSet() {
-  const f = state.focus, el = $("#c-set");
-  if (!f || f.kind !== "neuron") { el.innerHTML = ""; return; }
-  const mode = state.chat.mode, ph = mode === "mul" ? `×${state.chat.dose.mul}` : state.chat.dose.add;
-  const chip = (p, pinned) => {
-    const open = p.layer === f.layer && p.n === f.n, own = pinned ? p.dose[mode] : null;
-    return `<span class="pin${open ? " open" : ""}${pinned ? "" : " unpinned"}" data-l="${p.layer}" data-n="${p.n}">` +
-      `<button type="button" class="go mono" title="${open ? "the open neuron" : "open"}">L${p.layer} N${p.n}</button>` +
-      (pinned ? `<input class="pd mono" inputmode="decimal" placeholder="${ph}" value="${own == null ? "" : mode === "mul" ? `×${own}` : own}" title="own dose (empty = shared)" aria-label="dose for L${p.layer} N${p.n}">` +
-        `<button type="button" class="rm" aria-label="unpin">×</button>` : `<button type="button" class="add dim" title="pin: keep pushing it while you open others">pin</button>`) + `</span>`;
-  };
-  el.innerHTML = (pinOf(f.layer, f.n) ? "" : chip(f, false)) + state.chat.pins.map(p => chip(p, true)).join("") +
-    `<input id="c-pin" class="mono" placeholder="+ L5 N100" spellcheck="false" aria-label="pin a neuron">`;
-}
-$("#c-set").addEventListener("click", e => {
-  const c = e.target.closest(".pin"); if (!c) return;
-  const l = +c.dataset.l, n = +c.dataset.n;
-  if (e.target.closest(".rm")) { state.chat.pins = state.chat.pins.filter(p => p !== pinOf(l, n)); savePins(); renderSet(); }
-  else if (e.target.closest(".add")) addPin(l, n);
-  else if (e.target.closest(".go") && !isFocus(l, n, "neuron")) openNeuron(l, n);
-});
-$("#c-set").addEventListener("change", e => {
-  if (!e.target.matches(".pd")) return;
-  const c = e.target.closest(".pin"), p = pinOf(+c.dataset.l, +c.dataset.n), raw = e.target.value.replace(/[×x*]/g, "").trim();
-  const v = parseFloat(raw.replace("−", "-"));
-  p.dose[state.chat.mode] = raw === "" || !Number.isFinite(v) || (state.chat.mode === "mul" && v < 0) ? null : v;
-  savePins(); renderSet();
-});
-$("#c-set").addEventListener("keydown", e => {
-  if (e.target.id !== "c-pin" || e.key !== "Enter") return;
-  e.preventDefault();
-  const m = e.target.value.match(/L?\s*(\d+)\D+N?\s*(\d+)/i);
-  if (m) { addPin(+m[1], +m[2]); $("#c-pin").focus(); }
-});
+$("#c-fold").onclick = () => $("#c-rack").classList.toggle("folded");
+renderRack();
 
 let running = null;
 state.thread = [];
-const ROWS = ["up", "zero", "down"];
-function turnLabels(t) {
-  return t.mode === "mul" ? [`▲ ×${t.dose}`, "×1", `▼ ×−${t.dose}`] : [`▲ +${t.dose}`, "0", `▼ −${t.dose}`];
-}
+const recipeHTML = ns => ns.length
+  ? ns.map(x => { const k = { mode: x.mode, v: { [x.mode]: x.dose } }; return `<span class="rc ${pull(k) > 0 ? "up" : "down"}"><span class="mono">L${x.layer} N${x.n}</span> ${fmtVal(k)}</span>`; }).join("")
+  : `<span class="rc">plain model</span>`;
 function renderThread() {
   const el = $("#c-thread");
-  el.innerHTML = state.thread.map((t, i) => `<div class="turn" data-i="${i}">
-    <div class="user">${esc(t.user)}<span class="recipe">${t.mode === "mul" ? "×" : "add"} ${t.dose}${t.neurons.length > 1 ? " · " + t.neurons.map(x => `L${x.layer} N${x.n}${x.dose === t.dose ? "" : ` (${x.mode === "mul" ? "×" : ""}${x.dose})`}`).join(" + ") : ""}</span></div>
-    <div class="cols">${ROWS.map((c, r) => `<div class="col ${c}${t.live && !t.done[r] ? " live" : ""}"><span class="lab">${turnLabels(t)[r]}</span>${esc(t.replies[r])}</div>`).join("")}
-    ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}</div></div>`).join("");
+  el.innerHTML = state.thread.length ? state.thread.map((t, i) => `<div class="turn" data-i="${i}">
+    <div class="user">${esc(t.user)}</div>
+    <div class="bot">
+      <button type="button" class="recipe" title="load this steering into the rack">${recipeHTML(t.neurons)}</button>
+      <div class="reply${t.live ? " live" : ""}">${esc(t.reply)}</div>
+      ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}
+    </div></div>`).join("")
+    : `<div class="c-empty dim">Set the dials below, then send a message. Every reply is generated with the steering shown above it.</div>`;
   el.scrollTop = el.scrollHeight;
 }
+// a turn's recipe loads back into the rack: its neurons at those doses, everything else muted
+$("#c-thread").addEventListener("click", e => {
+  const b = e.target.closest(".recipe"); if (!b) return;
+  const t = state.thread[+b.closest(".turn").dataset.i];
+  for (const k of state.chat.rack) k.on = false;
+  for (const x of t.neurons) {
+    let k = knobOf(x.layer, x.n);
+    if (!k) { addKnob(x.layer, x.n); k = knobOf(x.layer, x.n); }
+    k.on = true; k.mode = x.mode; k.v[x.mode] = x.dose;
+  }
+  saveRack(); renderRack();
+});
 $("#c-clear").onclick = () => { if (running) running.abort(); state.thread = []; renderThread(); };
+renderThread();
 let reading = false;
 
 $("#c-form").addEventListener("submit", async e => {
   e.preventDefault();
   if (running) { running.abort(); return; }
-  const f = state.focus; if (!f) return;
+  const f = state.focus;
   const text = $("#c-input").value.trim() || $("#c-input").placeholder;
-  if (state.chat.dir === "reads") return runReads(f, text);
-  const dose = state.chat.mode === "mul" ? state.chat.dose.mul : state.chat.dose.add;
-  const history = state.thread.filter(t => !t.error).map(t => ({ user: t.user, replies: t.replies }));
-  const neurons = steerNeurons();
-  const turn = { user: text, replies: ["", "", ""], done: [false, false, false], dose, mode: state.chat.mode, neurons, live: true };
+  if (state.chat.dir === "reads") { if (f) runReads(f, text); return; }
+  const neurons = steerBody();
+  const history = state.thread.filter(t => !t.error).map(t => ({ user: t.user, reply: t.reply }));
+  const turn = { user: text, reply: "", neurons, live: true };
   state.thread.push(turn); $("#c-input").value = ""; renderThread();
-  const cols = [...$("#c-thread").lastElementChild.querySelectorAll(".col")];
+  const out = $("#c-thread").lastElementChild.querySelector(".reply");
   const ctl = new AbortController(), thread = state.thread;
-  running = ctl; $("#c-go").textContent = "stop";
+  running = ctl; $("#c-go").textContent = "stop"; $("#c-go").classList.add("stop");
   try {
     const res = await fetch("/api/steer", { method: "POST", headers: { "Content-Type": "application/json" }, signal: ctl.signal,
-      body: JSON.stringify({ neurons, prompt: text, dose, mode: state.chat.mode, history }) });
+      body: JSON.stringify({ neurons, prompt: text, history }) });
     if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 160)}`);
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
@@ -909,16 +953,15 @@ $("#c-form").addEventListener("submit", async e => {
         const ev = JSON.parse(line.slice(6));
         if (ev.error) turn.error = ev.error;
         if (ev.row == null) continue;
-        turn.replies[ev.row] += ev.t;
-        cols[ev.row].lastChild.nodeType === 3 ? (cols[ev.row].lastChild.textContent += ev.t) : cols[ev.row].append(ev.t);
+        turn.reply += ev.t; out.textContent = turn.reply;
         const th = $("#c-thread"); if (th.scrollHeight - th.scrollTop - th.clientHeight < 80) th.scrollTop = th.scrollHeight;
       }
     }
   } catch (err) {
     if (err.name !== "AbortError") turn.error = String(err);
   } finally {
-    turn.live = false; turn.done = [true, true, true];
-    if (running === ctl) { running = null; $("#c-go").textContent = "run"; }
+    turn.live = false;
+    if (running === ctl) { running = null; $("#c-go").textContent = "send"; $("#c-go").classList.remove("stop"); }
     if (state.thread === thread) renderThread();
   }
 });
@@ -927,9 +970,9 @@ async function runReads(f, text) {
   if (reading) return;
   reading = true; $("#c-go").textContent = "…";
   let r;
-  try { r = await api("/api/reads", { layer: f.layer, n: f.n, text, chat: true }); }
+  try { r = await api("/api/reads", { layer: f.layer, n: f.n, text, chat: true, neurons: steerBody() }); }
   catch (err) { $("#c-reads").textContent = err.message; return; }
-  finally { reading = false; $("#c-go").textContent = "run"; }
+  finally { reading = false; $("#c-go").textContent = "read"; }
   if (!isFocus(f.layer, f.n, "neuron")) return;
   const m = Math.max(1e-6, ...r.units.map(u => Math.abs(u.act)));
   $("#c-reads").innerHTML = r.units.map(u => {

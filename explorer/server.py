@@ -237,31 +237,31 @@ async def lens(layer: int, n: int):
     return await asyncio.to_thread(rt.lens, layer, n, 12)
 
 
+def _pushes(b):
+    """The steering of a Chat request: [{layer, n, dose, mode}], each applied exactly as given (add: signed dose in units
+    of the layer's median residual norm; mul: the activation's multiplier, 0 ablates, -1 flips)."""
+    return [(int(x["layer"]), int(x["n"]), float(x["dose"]), x.get("mode", "add")) for x in b.get("neurons") or []]
+
+
 @app.post("/api/reads")
 async def reads(req: Request):
     b = await req.json()
-    return await asyncio.to_thread(rt.read, int(b["layer"]), int(b["n"]), b["text"], b.get("chat", True))
+    return await asyncio.to_thread(rt.read, int(b["layer"]), int(b["n"]), b["text"], b.get("chat", True), _pushes(b))
 
 
 @app.post("/api/steer")
 async def steer(req: Request):
+    """The Chat tab: one conversation, greedy, with the given neurons pushed (none = the plain model). Streams text."""
     b = await req.json()
     loop, q, cancel = asyncio.get_running_loop(), asyncio.Queue(), threading.Event()
 
     def work():
         try:
-            # each row replays its own earlier replies; the user turns are shared
-            rows = []
-            for r in range(3):
-                msgs = []
-                for turn in b.get("history", []):
-                    msgs += [{"role": "user", "content": turn["user"]}, {"role": "assistant", "content": turn["replies"][r]}]
-                rows.append(msgs + [{"role": "user", "content": b["prompt"]}])
-            # one neuron (layer, n) or several (neurons: [{layer, n, dose?, mode?}]), each defaulting to the call's dose/mode
-            dose, mode = float(b["dose"]), b.get("mode", "add")
-            items = b.get("neurons") or [{"layer": b["layer"], "n": b["n"]}]
-            pushes = [(int(x["layer"]), int(x["n"]), float(x.get("dose", dose)), x.get("mode", mode)) for x in items]
-            for row, delta in rt.steer_multi(pushes, rows, int(b.get("max_new", 300)), cancel):
+            msgs = []
+            for turn in b.get("history", []):
+                msgs += [{"role": "user", "content": turn["user"]}, {"role": "assistant", "content": turn["reply"]}]
+            msgs.append({"role": "user", "content": b["prompt"]})
+            for row, delta in rt.steer_multi(_pushes(b), [msgs], int(b.get("max_new", 300)), cancel, signs=(1,)):
                 loop.call_soon_threadsafe(q.put_nowait, {"row": row, "t": delta})
         except Exception as e:  # surfaced in the UI next to the chat
             loop.call_soon_threadsafe(q.put_nowait, {"row": None, "error": repr(e)})

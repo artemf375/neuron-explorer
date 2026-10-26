@@ -19,8 +19,8 @@ steered chat, lens, connections and live inference over your own text.
   neurons with similar down-projection columns next to each other.
 - **list**: units ranked by word-cluster mass against random-direction controls; `lens` searches the steer and logit
   lenses for a token, `fires` runs your text through the model and filters neurons by activation.
-- **neuron**: steered rollouts per prompt and dose, a three-column multi-turn steered chat (−, 0, +), lens and
-  connections, and a name.
+- **neuron**: steered rollouts per prompt and dose, a multi-turn chat steered by a rack of neurons (one signed
+  dial each, add or ×, all pushed together and kept while you browse), lens and connections, and a name.
 - **embeddings**: UMAP of a layer's rollouts, coloured by neuron, prompt, dose or kind.
 - **Claude** (fourth neuron-panel tab, or the right-edge handle): a chat running the `claude` CLI (installed and
   logged in) with the explorer as an MCP server (`explorer/agent_mcp.py`). It reads neurons, cones and lenses, runs the

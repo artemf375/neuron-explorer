@@ -580,16 +580,17 @@ class Runtime:
         Yields (row, text_delta), then (None, None)."""
         yield from self.steer_multi([(layer, n, dose, mode)], rows_messages, max_new, cancel)
 
-    def steer_multi(self, pushes, rows_messages, max_new=200, cancel=None):
+    def steer_multi(self, pushes, rows_messages, max_new=200, cancel=None, signs=(1, 0, -1)):
         """steer_stream for any number of neurons at once: pushes = [(layer, n, dose, mode)], all applied together.
-        Each is reversed in row 2 the same way a single neuron is (add: -dose; mul: x -dose)."""
+        signs gives each row's direction, one per conversation in rows_messages: +1 pushed as given, 0 left alone, -1
+        reversed (add: -dose; mul: x -dose). signs=(1,) with one conversation applies the pushes exactly as given."""
         self.ensure_loaded()
         with self.lock:
             if cancel is not None and cancel.is_set():
                 yield None, None
                 return
             try:
-                push = [self._push_entry(layer, n, dose, mode, (1, 0, -1)) for layer, n, dose, mode in pushes]
+                push = [self._push_entry(layer, n, dose, mode, signs) for layer, n, dose, mode in pushes] or None
                 seqs = [self.messages_ids(m) for m in rows_messages]
                 T = max(map(len, seqs))
                 pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else 0
@@ -597,7 +598,8 @@ class Runtime:
                 mask = torch.tensor([[0] * (T - len(q)) + [1] * len(q) for q in seqs], device=self.dev)
                 pos = (mask.cumsum(-1) - 1).clamp(min=0)
                 eos = self.tok.convert_tokens_to_ids("<|im_end|>")
-                done, out_ids, sent = [False] * 3, [[] for _ in range(3)], [""] * 3
+                R = len(seqs)
+                done, out_ids, sent = [False] * R, [[] for _ in range(R)], [""] * R
                 self._push = push
                 with torch.inference_mode():
                     out = self.model(input_ids=ids, attention_mask=mask, position_ids=pos, use_cache=True,
@@ -606,7 +608,7 @@ class Runtime:
                         if cancel is not None and cancel.is_set():
                             break
                         nxt = out.logits[:, -1].argmax(-1)
-                        for r in range(3):
+                        for r in range(R):
                             if done[r]:
                                 continue
                             t = int(nxt[r])
