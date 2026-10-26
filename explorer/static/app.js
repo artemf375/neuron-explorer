@@ -889,15 +889,15 @@ document.querySelectorAll("#c-dir button").forEach(b => b.onclick = () => {
   document.querySelectorAll("#c-dir button").forEach(x => x.classList.toggle("on", x === b));
   $("#tab-chat").classList.toggle("reads", b.dataset.d === "reads");
   $("#c-input").placeholder = b.dataset.d === "reads" ? "text to read: the open neuron's activation, with the rack applied" : "Who are you?";
-  $("#c-go").textContent = b.dataset.d === "reads" ? "read" : "send";
+  syncGo();
 });
 $("#c-fold").onclick = () => $("#c-rack").classList.toggle("folded");
 renderRack();
 
-let running = null;
 // ---- conversations: each chat is a tree. A message node holds your text, the reply and the steering it was made with;
 // editing a message or retrying a reply adds a sibling (a branch) and ‹ 2/3 › flips between them. state.thread is the
-// path on show. Chats live in this browser; "history" lists them, "branch" copies the path up to a turn into a new chat.
+// path on show. Chats live in this browser (localStorage). Each reply streams on its own: switching branch or chat
+// leaves it running, and stop ends only the replies on the path you're looking at. The server runs them one at a time.
 const CHATS_KEY = "explorer.chats", OPEN_KEY = "explorer.chatOpen";
 const uid = () => crypto.randomUUID();
 const blankChat = () => ({ id: uid(), title: "", t: Date.now(), nodes: { root: { id: "root", kids: [], sel: 0 } } });
@@ -905,7 +905,16 @@ let chats = [];
 try { chats = JSON.parse(localStorage.getItem(CHATS_KEY) || "[]"); } catch {}
 for (const c of chats) for (const n of Object.values(c.nodes)) n.live = false;
 let chat = chats.find(c => c.id === localStorage.getItem(OPEN_KEY)) || blankChat();
-let editing = null, showHistory = false;
+let editing = null, showHistory = false, histQuery = "", renaming = null;
+const gens = new Map();  // node id -> AbortController of its streaming reply
+const liveOnPath = () => state.thread.filter(t => gens.has(t.id));
+// the composer's button: stop while a reply on this path streams, otherwise send (or read)
+function syncGo() {
+  const live = state.chat.dir !== "reads" && liveOnPath().length > 0;
+  $("#c-go").textContent = live ? "stop" : state.chat.dir === "reads" ? "read" : "send";
+  $("#c-go").classList.toggle("stop", live);
+}
+const chatLive = c => Object.keys(c.nodes).some(id => gens.has(id));
 function saveChats() {
   if (!chats.includes(chat) && chat.nodes.root.kids.length) chats.unshift(chat);
   chats.sort((a, b) => b.t - a.t);
@@ -941,16 +950,29 @@ function turnHTML(t) {
       ${t.live ? "" : `<div class="t-ctl"><button type="button" data-act="retry" title="ask again with the rack as set now (a new branch)">↻ retry</button><button type="button" data-act="copy">copy</button></div>`}
     </div></div>`;
 }
+// history: newest first, grouped by day; search runs over titles and every message on every branch
+const dayGroup = t => {
+  const d0 = new Date(); d0.setHours(0, 0, 0, 0); const day = 864e5;
+  return t >= +d0 ? "Today" : t >= d0 - day ? "Yesterday" : t >= d0 - 7 * day ? "Previous 7 days" : t >= d0 - 30 * day ? "Previous 30 days" : "Older";
+};
+const chatText = c => [c.title, ...Object.values(c.nodes).map(n => `${n.user || ""}\n${n.reply || ""}`)].join("\n").toLowerCase();
 function renderHistory() {
-  const el = $("#c-thread"), cur = chats.includes(chat) ? chat.id : null;
-  el.innerHTML = `<div class="c-hist">${chats.length ? chats.map(c => {
+  const el = $("#c-thread"), cur = chats.includes(chat) ? chat.id : null, q = histQuery.trim().toLowerCase();
+  const list = q ? chats.filter(c => chatText(c).includes(q)) : chats;
+  let html = `<div class="c-hist"><div class="c-hist-head"><input id="c-hist-q" placeholder="search chats" value="${esc(histQuery)}" spellcheck="false" autocomplete="off"><button type="button" class="new" data-act="new">+ new chat</button></div>`, group = null;
+  for (const c of list) {
+    const g = dayGroup(c.t); if (g !== group) { group = g; html += `<div class="c-hist-group">${g}</div>`; }
     const n = Object.keys(c.nodes).length - 1, br = branchCount(c);
-    return `<div class="c-histrow${c.id === cur ? " on" : ""}" data-c="${c.id}"><button type="button" class="open"><span class="t">${esc(c.title || "—")}</span><span class="m">${agoMs(c.t)} · ${n} message${n === 1 ? "" : "s"}${br ? ` · ${br} branch${br === 1 ? "" : "es"}` : ""}</span></button><button type="button" class="del" aria-label="delete chat" title="delete">×</button></div>`;
-  }).join("") : `<div class="c-empty dim">No chats yet.</div>`}</div>`;
+    const title = renaming === c.id ? `<input class="c-rename" value="${esc(c.title)}" spellcheck="false">` : `<span class="t">${chatLive(c) ? `<i class="dot" title="replying"></i>` : ""}${esc(c.title || "—")}</span>`;
+    html += `<div class="c-histrow${c.id === cur ? " on" : ""}" data-c="${c.id}"><div class="open" role="button" tabindex="0">${title}<span class="m">${agoMs(c.t)} · ${n} message${n === 1 ? "" : "s"}${br ? ` · ${br} branch${br === 1 ? "" : "es"}` : ""}</span></div><button type="button" class="ren" title="rename" aria-label="rename chat">✎</button><button type="button" class="del" title="delete" aria-label="delete chat">×</button></div>`;
+  }
+  if (!list.length) html += `<div class="c-empty dim">${q ? "Nothing matches." : "No chats yet."}</div>`;
+  el.innerHTML = html + `</div>`;
+  const r = el.querySelector(".c-rename"); if (r) { r.focus(); r.select(); }
 }
 function renderThread() {
   state.thread = pathOf(chat);
-  $("#c-history").classList.toggle("on", showHistory);
+  $("#c-history").classList.toggle("on", showHistory); syncGo();
   $("#c-export").disabled = !state.thread.some(t => !t.live && (t.reply || t.error));
   if (showHistory) return renderHistory();
   const el = $("#c-thread");
@@ -960,23 +982,20 @@ function renderThread() {
   const ta = el.querySelector(".t-edit"); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); ta.style.height = `${ta.scrollHeight}px`; }
 }
 function openChat(c) {
-  if (running) running.abort();
   chat = c; editing = null; showHistory = false;
   try { localStorage.setItem(OPEN_KEY, c.id); } catch {}
   renderThread();
 }
 // a new message under `parentId` (root for the first): becomes the shown branch and streams its reply, steered by the rack
 async function generate(parentId, text) {
-  if (running) running.abort();
   const c = chat, parent = c.nodes[parentId];
   const history = pathOf(c, parentId).filter(t => !t.error).map(t => ({ user: t.user, reply: t.reply }));
   const neurons = steerBody();
   const turn = { id: uid(), parent: parentId, kids: [], sel: 0, user: text, reply: "", neurons, live: true };
   c.nodes[turn.id] = turn; parent.kids.push(turn.id); parent.sel = parent.kids.length - 1;
   if (!c.title) c.title = text.slice(0, 80);
+  const ctl = new AbortController(); gens.set(turn.id, ctl);
   c.t = Date.now(); editing = null; showHistory = false; saveChats(); renderThread();
-  const ctl = new AbortController();
-  running = ctl; $("#c-go").textContent = "stop"; $("#c-go").classList.add("stop");
   try {
     const res = await fetch("/api/steer", { method: "POST", headers: { "Content-Type": "application/json" }, signal: ctl.signal,
       body: JSON.stringify({ neurons, prompt: text, history }) });
@@ -1001,9 +1020,10 @@ async function generate(parentId, text) {
   } catch (err) {
     if (err.name !== "AbortError") turn.error = String(err);
   } finally {
-    turn.live = false;
-    if (running === ctl) { running = null; $("#c-go").textContent = state.chat.dir === "reads" ? "read" : "send"; $("#c-go").classList.remove("stop"); }
-    saveChats();
+    turn.live = false; gens.delete(turn.id);
+    if (chats.includes(c) || chat === c) saveChats();  // a chat deleted mid-reply stays deleted
+    syncGo();
+    if (showHistory && !$("#c-thread").contains(document.activeElement)) renderHistory();  // its "replying" dots
     if (chat === c && !showHistory) {
       // an open edit box elsewhere survives: only this turn is redrawn
       const el = editing && $(`#c-thread .turn[data-id="${turn.id}"]`);
@@ -1013,14 +1033,18 @@ async function generate(parentId, text) {
 }
 const nodeAt = el => chat.nodes[el.closest(".turn")?.dataset.id];
 $("#c-thread").addEventListener("click", e => {
+  if (e.target.closest(".c-hist-head .new")) { openChat(blankChat()); $("#c-input").focus(); return; }
   const row = e.target.closest(".c-histrow");
   if (row) {
-    const c = chats.find(x => x.id === row.dataset.c);
+    const c = chats.find(x => x.id === row.dataset.c); if (!c) return;
+    if (e.target.closest(".c-rename")) return;
     if (e.target.closest(".del")) {
+      for (const id of Object.keys(c.nodes)) gens.get(id)?.abort();
       chats = chats.filter(x => x !== c);
-      if (c === chat) { if (running) running.abort(); chat = blankChat(); }
+      if (c === chat) chat = blankChat();
       saveChats(); renderThread();
-    } else if (c) openChat(c);
+    } else if (e.target.closest(".ren")) { renaming = c.id; renderHistory(); }
+    else openChat(c);
     return;
   }
   // a turn's recipe: a neuron opens it; "load" puts the recipe back into the rack (its neurons at those doses, the rest muted)
@@ -1061,7 +1085,25 @@ $("#c-thread").addEventListener("keydown", e => {
 });
 $("#c-thread").addEventListener("input", e => { if (e.target.matches(".t-edit")) { e.target.style.height = "auto"; e.target.style.height = `${e.target.scrollHeight}px`; } });
 $("#c-clear").onclick = () => { if (chat.nodes.root.kids.length || showHistory) openChat(blankChat()); };
-$("#c-history").onclick = () => { showHistory = !showHistory; editing = null; renderThread(); };
+$("#c-history").onclick = () => { showHistory = !showHistory; editing = null; renaming = null; renderThread(); if (showHistory) $("#c-hist-q").focus(); };
+// history: typing searches, Enter in a rename saves it, Esc backs out (of the rename, else of the list)
+$("#c-thread").addEventListener("input", e => {
+  if (!e.target.matches("#c-hist-q")) return;
+  histQuery = e.target.value; const at = e.target.selectionStart;
+  renderHistory(); const q = $("#c-hist-q"); q.focus(); q.setSelectionRange(at, at);
+});
+function finishRename(input, keep) {
+  const c = chats.find(x => x.id === renaming); renaming = null;
+  if (keep && c && input.value.trim()) { c.title = input.value.trim().slice(0, 120); saveChats(); }
+  renderHistory();
+}
+$("#c-thread").addEventListener("keydown", e => {
+  if (e.target.matches(".c-rename")) { if (e.key === "Enter") finishRename(e.target, true); else if (e.key === "Escape") finishRename(e.target, false); return; }
+  if (e.key === "Escape" && showHistory) { showHistory = false; renderThread(); }
+});
+$("#c-thread").addEventListener("focusout", e => { if (e.target.matches(".c-rename") && renaming) finishRename(e.target, true); });
+// a reply still streaming when the page goes is kept as far as it got
+addEventListener("pagehide", () => { for (const c of chats) for (const n of Object.values(c.nodes)) n.live = false; saveChats(); });
 // export: a small menu of formats; the model name comes from the server, so the JSON's "model" is the one that answered
 let chatModel = "Qwen/Qwen3.5-4B";
 api("/api/agent/overview").then(o => { if (o.model) chatModel = o.model; }).catch(() => {});
@@ -1081,7 +1123,8 @@ let reading = false;
 
 $("#c-form").addEventListener("submit", async e => {
   e.preventDefault();
-  if (running) { running.abort(); return; }
+  const live = state.chat.dir !== "reads" && liveOnPath();
+  if (live && live.length) { for (const t of live) gens.get(t.id).abort(); return; }
   const f = state.focus;
   const text = $("#c-input").value.trim() || $("#c-input").placeholder;
   if (state.chat.dir === "reads") {

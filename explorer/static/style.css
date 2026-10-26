@@ -213,11 +213,19 @@ button.rc:hover { color: var(--ink); background: rgba(255,255,255,0.12); }
 /* chat history */
 .c-histrow { display: flex; align-items: center; border-radius: 6px; }
 .c-histrow:hover, .c-histrow.on { background: var(--raise); }
-.c-histrow .open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; }
+.c-histrow .open { cursor: pointer; flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; }
 .c-histrow .t { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .c-histrow .m { font: 11px var(--mono); color: var(--faint); }
-.c-histrow .del { padding: 4px 10px; color: var(--faint); visibility: hidden; }
-.c-histrow:hover .del { visibility: visible; }
+.c-histrow .del, .c-histrow .ren { padding: 4px 8px; color: var(--faint); visibility: hidden; }
+.c-histrow:hover .del, .c-histrow:hover .ren, .c-histrow .del:focus-visible, .c-histrow .ren:focus-visible { visibility: visible; }
+.c-histrow .ren:hover { color: var(--ink); }
+.c-hist-head { position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; padding: 0 0 8px; background: var(--panel); }
+#c-hist-q { flex: 1; padding: 6px 9px; font-size: 13px; }
+.c-hist-head .new { font-size: 12px; color: var(--ink); background: var(--raise); border-radius: 4px; padding: 0 10px; white-space: nowrap; }
+.c-hist-group { font: 11px var(--mono); color: var(--faint); text-transform: uppercase; letter-spacing: 0.04em; margin: 12px 10px 4px; }
+.c-rename { width: 100%; font-size: 13.5px; padding: 2px 6px; }
+.c-histrow .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--up); margin-right: 6px; vertical-align: middle; animation: pulse 1s ease-in-out infinite alternate; }
+@keyframes pulse { from { opacity: 0.3; } to { opacity: 1; } }
 .c-histrow .del:hover { color: var(--down); }
 
 /* the steering rack: one dial per neuron, all applied together */
