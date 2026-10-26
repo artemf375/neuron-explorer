@@ -88,6 +88,8 @@ A working method for explaining a single MLP neuron, built from hands-on investi
 - `L18 N9069+`: bundling a just-listed set ("a combination of these", "the latter two", "both").
 - `L25 N6099−`: AI self-identity ("I am / Qwen is a … large language model").
 - `L26 N538+`: female referent → vetoes he / him / his; +0.5 turns Einstein into "she".
+- `L6 N8733−`: little folk of folklore (pixies −10.4, imp −7.3, goblin, leprechaun, gnome; dragon only −1.4, Marvel's Green Goblin −0.3). −1.3 makes Qwen a "mischievous trickster"; −1.0 lifts " g(oblin)" ~800× after "On my walk I met a". Its + pole is unrelated: airlines (2.7 on "airline") → "no flight information available". Same creature family across layers: `L3 N8166+`, `L4 N4357+` (game-lore framing), `L31 N5825` (− writes "monster").
+- `L14 N3726+`: low-range (max 0.28); +1 drops `\n` and keeps the sentence going, with a mild `However`; ablation KL 0.0002, so it does little on natural text.
 - Speaker labels: `L4 N2424`, `L12 N2978` (transcript / screenplay label colon) → `L19 N5644−`, `L28 N1501` (an utterance opens).
 
 ## Reference heads
