@@ -199,6 +199,7 @@ button.rc:hover { color: var(--ink); background: rgba(255,255,255,0.12); }
 .turn .t-ctl { display: flex; gap: 10px; align-items: center; margin: -4px 0 8px; font: 11.5px var(--mono); color: var(--dim); }
 .turn > .t-ctl { justify-content: flex-end; }
 .turn .bot .t-ctl { margin: 4px 0 0; }
+.turn .t-stats { margin-left: auto; cursor: default; font-variant-numeric: tabular-nums; }
 .turn .t-ctl button { color: var(--dim); }
 .turn .t-ctl button:hover { color: var(--ink); }
 .turn .t-ctl > button { visibility: hidden; }

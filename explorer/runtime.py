@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 
 import numpy as np
 import torch
@@ -580,18 +581,22 @@ class Runtime:
         Yields (row, text_delta), then (None, None)."""
         yield from self.steer_multi([(layer, n, dose, mode)], rows_messages, max_new, cancel)
 
-    def steer_multi(self, pushes, rows_messages, max_new=200, cancel=None, signs=(1, 0, -1)):
+    def steer_multi(self, pushes, rows_messages, max_new=200, cancel=None, signs=(1, 0, -1), stats=None):
         """steer_stream for any number of neurons at once: pushes = [(layer, n, dose, mode)], all applied together.
         signs gives each row's direction, one per conversation in rows_messages: +1 pushed as given, 0 left alone, -1
-        reversed (add: -dose; mul: x -dose). signs=(1,) with one conversation applies the pushes exactly as given."""
+        reversed (add: -dose; mul: x -dose). signs=(1,) with one conversation applies the pushes exactly as given.
+        A stats dict, when given, is filled per row with tokens in (prompt) and out (generated), and the seconds spent
+        tokenizing, on the prompt (prefill) and generating (decode)."""
         self.ensure_loaded()
         with self.lock:
             if cancel is not None and cancel.is_set():
                 yield None, None
                 return
+            t0, t_pre = time.perf_counter(), None
             try:
                 push = [self._push_entry(layer, n, dose, mode, signs) for layer, n, dose, mode in pushes] or None
                 seqs = [self.messages_ids(m) for m in rows_messages]
+                t_tok = time.perf_counter()
                 T = max(map(len, seqs))
                 pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else 0
                 ids = torch.tensor([[pad] * (T - len(q)) + q for q in seqs], device=self.dev)
@@ -604,6 +609,8 @@ class Runtime:
                 with torch.inference_mode():
                     out = self.model(input_ids=ids, attention_mask=mask, position_ids=pos, use_cache=True,
                                      logits_to_keep=1)
+                    out.logits[0, -1, 0].item()  # waits for the GPU, so the prefill is timed in full
+                    t_pre = time.perf_counter()
                     for _ in range(max_new):
                         if cancel is not None and cancel.is_set():
                             break
@@ -628,6 +635,11 @@ class Runtime:
                                          past_key_values=out.past_key_values, use_cache=True, logits_to_keep=1)
             finally:
                 self._push = None
+                if stats is not None and t_pre is not None:
+                    end = time.perf_counter()
+                    stats.update({"in": [len(q) for q in seqs], "out": [len(o) for o in out_ids],
+                                  "tokenize_s": t_tok - t0, "prefill_s": t_pre - t_tok, "decode_s": end - t_pre,
+                                  "total_s": end - t0})
         yield None, None
 
     def token_units(self, ids):

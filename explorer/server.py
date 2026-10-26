@@ -261,8 +261,14 @@ async def steer(req: Request):
             for turn in b.get("history", []):
                 msgs += [{"role": "user", "content": turn["user"]}, {"role": "assistant", "content": turn["reply"]}]
             msgs.append({"role": "user", "content": b["prompt"]})
-            for row, delta in rt.steer_multi(_pushes(b), [msgs], int(b.get("max_new", 300)), cancel, signs=(1,)):
-                loop.call_soon_threadsafe(q.put_nowait, {"row": row, "t": delta})
+            stats = {}
+            for row, delta in rt.steer_multi(_pushes(b), [msgs], int(b.get("max_new", 300)), cancel, signs=(1,),
+                                             stats=stats):
+                ev = {"row": row, "t": delta}
+                if row is None and stats:  # the last event carries the token counts and timings
+                    ev["stats"] = {"in": stats["in"][0], "out": stats["out"][0],
+                                   **{k: round(v, 3) for k, v in stats.items() if k.endswith("_s")}}
+                loop.call_soon_threadsafe(q.put_nowait, ev)
         except Exception as e:  # surfaced in the UI next to the chat
             loop.call_soon_threadsafe(q.put_nowait, {"row": None, "error": repr(e)})
 

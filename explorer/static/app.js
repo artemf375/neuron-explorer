@@ -947,7 +947,7 @@ function turnHTML(t) {
       <div class="recipe">${recipeHTML(t.neurons)}</div>
       <div class="reply${t.live ? " live" : ""}">${esc(t.reply)}</div>
       ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}
-      ${t.live ? "" : `<div class="t-ctl"><button type="button" data-act="retry" title="ask again with the rack as set now (a new branch)">↻ retry</button><button type="button" data-act="copy">copy</button></div>`}
+      ${t.live ? "" : `<div class="t-ctl"><button type="button" data-act="retry" title="ask again with the rack as set now (a new branch)">↻ retry</button><button type="button" data-act="copy">copy</button>${statsHTML(t.stats)}</div>`}
     </div></div>`;
 }
 // history: newest first, grouped by day; search runs over titles and every message on every branch
@@ -955,6 +955,14 @@ const dayGroup = t => {
   const d0 = new Date(); d0.setHours(0, 0, 0, 0); const day = 864e5;
   return t >= +d0 ? "Today" : t >= d0 - day ? "Yesterday" : t >= d0 - 7 * day ? "Previous 7 days" : t >= d0 - 30 * day ? "Previous 30 days" : "Older";
 };
+// a reply's token counts and timings, as /api/steer reports them on its last event
+function statsHTML(st) {
+  if (!st) return "";
+  const sec = v => v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(1)} s`;
+  const rate = st.decode_s > 0 ? ` · ${(st.out / st.decode_s).toFixed(1)} tok/s` : "";
+  const tip = `tokenize ${sec(st.tokenize_s)} · prefill ${sec(st.prefill_s)} · decode ${sec(st.decode_s)}`;
+  return `<span class="t-stats" title="${tip}">${st.in} in · ${st.out} out · ${sec(st.total_s)}${rate}</span>`;
+}
 const chatText = c => [c.title, ...Object.values(c.nodes).map(n => `${n.user || ""}\n${n.reply || ""}`)].join("\n").toLowerCase();
 function renderHistory() {
   const el = $("#c-thread"), cur = chats.includes(chat) ? chat.id : null, q = histQuery.trim().toLowerCase();
@@ -1011,6 +1019,7 @@ async function generate(parentId, text) {
         if (!line.startsWith("data: ")) continue;
         const ev = JSON.parse(line.slice(6));
         if (ev.error) turn.error = ev.error;
+        if (ev.stats) turn.stats = ev.stats;
         if (ev.row == null) continue;
         turn.reply += ev.t;
         const out = chat === c && !showHistory && $(`#c-thread .turn[data-id="${turn.id}"] .reply`);
