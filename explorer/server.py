@@ -257,8 +257,11 @@ async def steer(req: Request):
                 for turn in b.get("history", []):
                     msgs += [{"role": "user", "content": turn["user"]}, {"role": "assistant", "content": turn["replies"][r]}]
                 rows.append(msgs + [{"role": "user", "content": b["prompt"]}])
-            for row, delta in rt.steer_stream(int(b["layer"]), int(b["n"]), rows, float(b["dose"]),
-                                              b.get("mode", "add"), int(b.get("max_new", 300)), cancel):
+            # one neuron (layer, n) or several (neurons: [{layer, n, dose?, mode?}]), each defaulting to the call's dose/mode
+            dose, mode = float(b["dose"]), b.get("mode", "add")
+            items = b.get("neurons") or [{"layer": b["layer"], "n": b["n"]}]
+            pushes = [(int(x["layer"]), int(x["n"]), float(x.get("dose", dose)), x.get("mode", mode)) for x in items]
+            for row, delta in rt.steer_multi(pushes, rows, int(b.get("max_new", 300)), cancel):
                 loop.call_soon_threadsafe(q.put_nowait, {"row": row, "t": delta})
         except Exception as e:  # surfaced in the UI next to the chat
             loop.call_soon_threadsafe(q.put_nowait, {"row": None, "error": repr(e)})
