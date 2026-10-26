@@ -207,7 +207,15 @@ button.rc:hover { color: var(--ink); background: rgba(255,255,255,0.12); }
 #c-summary.live { color: var(--up); }
 #c-dir { margin-left: auto; font-size: 12px; }
 #c-reset, #c-clear { font-size: 12px; }
-#c-reset:disabled { opacity: 0.35; cursor: default; }
+#c-reset:disabled, #c-export:disabled { opacity: 0.35; cursor: default; }
+#c-export-wrap { position: relative; }
+#c-export { font-size: 12px; }
+#c-export-menu { position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 10; min-width: 210px; padding: 4px;
+  background: #121416; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+#c-export-menu button { display: flex; align-items: baseline; gap: 10px; width: 100%; padding: 6px 8px; border-radius: 4px; text-align: left; }
+#c-export-menu button:hover, #c-export-menu button:focus-visible { background: var(--raise); }
+#c-export-menu b { font: 500 12px var(--mono); color: var(--ink); width: 3.2em; }
+#c-export-menu span { font-size: 12px; color: var(--dim); }
 #c-knobs { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; max-height: 34vh; overflow-y: auto; }
 .rack-empty { font-size: 12.5px; padding: 6px 0; }
 .knob { --tone: var(--faint); display: grid; grid-template-columns: 14px minmax(0, 9.5em) minmax(80px, 1fr) 4.4em auto 18px; gap: 8px;

@@ -1,5 +1,6 @@
 import { createMap } from "./map3d.js?v=78";
 import { createScatter } from "./scatter.js?v=39";
+import { exportChat, FORMATS } from "./export.js?v=1";
 
 const $ = s => document.querySelector(s);
 const api = async (p, body) => {
@@ -909,6 +910,7 @@ function renderThread() {
       ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}
     </div></div>`).join("")
     : `<div class="c-empty dim">Set the dials below, then send a message. Every reply is generated with the steering shown above it.</div>`;
+  $("#c-export").disabled = !state.thread.some(t => !t.live && (t.reply || t.error));
   el.scrollTop = el.scrollHeight;
 }
 // a turn's recipe: a neuron opens it; "load" puts the recipe back into the rack (its neurons at those doses, the rest muted)
@@ -926,6 +928,20 @@ $("#c-thread").addEventListener("click", e => {
   saveRack(); renderRack();
 });
 $("#c-clear").onclick = () => { if (running) running.abort(); state.thread = []; renderThread(); };
+// export: a small menu of formats; the model name comes from the server, so the JSON's "model" is the one that answered
+let chatModel = "Qwen/Qwen3.5-4B";
+api("/api/agent/overview").then(o => { if (o.model) chatModel = o.model; }).catch(() => {});
+const exportMenu = $("#c-export-menu");
+exportMenu.innerHTML = FORMATS.map(f => `<button type="button" role="menuitem" data-f="${f.id}"><b>${f.label}</b><span>${f.hint}</span></button>`).join("");
+const showExport = on => { exportMenu.hidden = !on; $("#c-export").setAttribute("aria-expanded", on); };
+$("#c-export").onclick = e => { e.stopPropagation(); showExport(exportMenu.hidden); };
+exportMenu.onclick = e => {
+  const b = e.target.closest("[data-f]"); if (!b) return;
+  showExport(false);
+  exportChat(b.dataset.f, { thread: state.thread, model: chatModel, nameOf: unitName });
+};
+document.addEventListener("click", e => { if (!e.target.closest("#c-export-wrap")) showExport(false); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !exportMenu.hidden) showExport(false); });
 renderThread();
 let reading = false;
 
