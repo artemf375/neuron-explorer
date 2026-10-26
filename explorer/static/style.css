@@ -195,6 +195,30 @@ button.rc:hover { color: var(--ink); background: rgba(255,255,255,0.12); }
 .turn .reply { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.5; }
 .turn .reply.live::after { content: "▍"; color: var(--faint); }
 .turn .err { color: #e06c6c; font-size: 12px; margin-top: 4px; }
+/* per-turn controls: show on hover (the branch switcher always), like the usual chat apps */
+.turn .t-ctl { display: flex; gap: 10px; align-items: center; margin: -4px 0 8px; font: 11.5px var(--mono); color: var(--dim); }
+.turn > .t-ctl { justify-content: flex-end; }
+.turn .bot .t-ctl { margin: 4px 0 0; }
+.turn .t-ctl button { color: var(--dim); }
+.turn .t-ctl button:hover { color: var(--ink); }
+.turn .t-ctl > button { visibility: hidden; }
+.turn:hover .t-ctl > button, .turn .t-ctl.on > button, .turn .t-ctl > button:focus-visible { visibility: visible; }
+.t-nav { display: inline-flex; align-items: center; gap: 2px; color: var(--faint); }
+.t-nav button { padding: 0 4px; font-size: 13px; }
+.t-nav button:disabled { opacity: 0.3; cursor: default; }
+.turn .user.editing { width: 80%; max-width: 80%; padding: 6px; }
+.t-edit { width: 100%; resize: none; background: none; border: 0; color: var(--ink); font: inherit; line-height: 1.45; outline: none; }
+.turn .user.editing .t-ctl { justify-content: flex-end; margin: 4px 0 0; }
+.t-ctl button.go { color: var(--ink); background: rgba(255,255,255,0.1); border-radius: 4px; padding: 2px 10px; }
+/* chat history */
+.c-histrow { display: flex; align-items: center; border-radius: 6px; }
+.c-histrow:hover, .c-histrow.on { background: var(--raise); }
+.c-histrow .open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; }
+.c-histrow .t { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.c-histrow .m { font: 11px var(--mono); color: var(--faint); }
+.c-histrow .del { padding: 4px 10px; color: var(--faint); visibility: hidden; }
+.c-histrow:hover .del { visibility: visible; }
+.c-histrow .del:hover { color: var(--down); }
 
 /* the steering rack: one dial per neuron, all applied together */
 #c-rack { background: rgba(255,255,255,0.03); border-radius: 6px; padding: 8px 10px; }
@@ -206,7 +230,8 @@ button.rc:hover { color: var(--ink); background: rgba(255,255,255,0.12); }
 #c-summary { font-size: 11px; color: var(--faint); }
 #c-summary.live { color: var(--up); }
 #c-dir { margin-left: auto; font-size: 12px; }
-#c-reset, #c-clear { font-size: 12px; }
+#c-reset, #c-clear, #c-history { font-size: 12px; }
+#c-history.on { color: var(--ink); }
 #c-reset:disabled, #c-export:disabled { opacity: 0.35; cursor: default; }
 #c-export-wrap { position: relative; }
 #c-export { font-size: 12px; }

@@ -895,39 +895,173 @@ $("#c-fold").onclick = () => $("#c-rack").classList.toggle("folded");
 renderRack();
 
 let running = null;
-state.thread = [];
+// ---- conversations: each chat is a tree. A message node holds your text, the reply and the steering it was made with;
+// editing a message or retrying a reply adds a sibling (a branch) and ‹ 2/3 › flips between them. state.thread is the
+// path on show. Chats live in this browser; "history" lists them, "branch" copies the path up to a turn into a new chat.
+const CHATS_KEY = "explorer.chats", OPEN_KEY = "explorer.chatOpen";
+const uid = () => crypto.randomUUID();
+const blankChat = () => ({ id: uid(), title: "", t: Date.now(), nodes: { root: { id: "root", kids: [], sel: 0 } } });
+let chats = [];
+try { chats = JSON.parse(localStorage.getItem(CHATS_KEY) || "[]"); } catch {}
+for (const c of chats) for (const n of Object.values(c.nodes)) n.live = false;
+let chat = chats.find(c => c.id === localStorage.getItem(OPEN_KEY)) || blankChat();
+let editing = null, showHistory = false;
+function saveChats() {
+  if (!chats.includes(chat) && chat.nodes.root.kids.length) chats.unshift(chat);
+  chats.sort((a, b) => b.t - a.t);
+  for (;;) {
+    try { localStorage.setItem(CHATS_KEY, JSON.stringify(chats)); localStorage.setItem(OPEN_KEY, chat.id); return; }
+    catch { if (chats.length <= 1) return; chats.pop(); }  // over quota: the oldest chat goes
+  }
+}
+function pathOf(c, upTo) {
+  if (upTo) { const out = []; for (let n = c.nodes[upTo]; n.id !== "root"; n = c.nodes[n.parent]) out.unshift(n); return out; }
+  const out = []; for (let n = c.nodes.root; n.kids.length; ) { n = c.nodes[n.kids[Math.min(n.sel, n.kids.length - 1)]]; out.push(n); } return out;
+}
+const branchCount = c => Object.values(c.nodes).filter(n => n.kids.length > 1).reduce((s, n) => s + n.kids.length - 1, 0);
+const agoMs = t => { const s = (Date.now() - t) / 1000; return s < 3600 ? `${Math.max(1, Math.round(s / 60))}m ago` : s < 86400 ? `${Math.round(s / 3600)}h ago` : new Date(t).toLocaleDateString(); };
+
 const recipeHTML = ns => ns.length
   ? ns.map(x => { const k = { mode: x.mode, v: { [x.mode]: x.dose } }; return `<button type="button" class="rc ${pull(k) > 0 ? "up" : "down"}" data-l="${x.layer}" data-n="${x.n}" title="open L${x.layer} N${x.n}"><span class="mono">L${x.layer} N${x.n}</span> ${fmtVal(k)}</button>`; }).join("")
     + `<button type="button" class="rc load" title="load this steering into the rack">↺ load</button>`
   : `<span class="rc">plain model</span>`;
-function renderThread() {
-  const el = $("#c-thread");
-  el.innerHTML = state.thread.length ? state.thread.map((t, i) => `<div class="turn" data-i="${i}">
-    <div class="user">${esc(t.user)}</div>
+function turnHTML(t) {
+  const sibs = chat.nodes[t.parent].kids, at = sibs.indexOf(t.id);
+  const nav = sibs.length > 1 ? `<span class="t-nav mono"><button type="button" data-act="prev" ${at ? "" : "disabled"} aria-label="previous version">‹</button>${at + 1}/${sibs.length}<button type="button" data-act="next" ${at < sibs.length - 1 ? "" : "disabled"} aria-label="next version">›</button></span>` : "";
+  const user = editing === t.id
+    ? `<div class="user editing"><textarea class="t-edit" rows="2" spellcheck="false">${esc(t.user)}</textarea>
+        <div class="t-ctl on"><button type="button" data-act="cancel">cancel</button><button type="button" data-act="resend" class="go" title="send as a new branch, with the rack as set now">send</button></div></div>`
+    : `<div class="user">${esc(t.user)}</div>
+       <div class="t-ctl">${nav}<button type="button" data-act="edit" title="edit and resend as a new branch">edit</button><button type="button" data-act="branch" title="copy the chat up to here into a new chat">⑂ branch</button></div>`;
+  return `<div class="turn" data-id="${t.id}">${user}
     <div class="bot">
       <div class="recipe">${recipeHTML(t.neurons)}</div>
       <div class="reply${t.live ? " live" : ""}">${esc(t.reply)}</div>
       ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}
-    </div></div>`).join("")
-    : `<div class="c-empty dim">Set the dials below, then send a message. Every reply is generated with the steering shown above it.</div>`;
-  $("#c-export").disabled = !state.thread.some(t => !t.live && (t.reply || t.error));
-  el.scrollTop = el.scrollHeight;
+      ${t.live ? "" : `<div class="t-ctl"><button type="button" data-act="retry" title="ask again with the rack as set now (a new branch)">↻ retry</button><button type="button" data-act="copy">copy</button></div>`}
+    </div></div>`;
 }
-// a turn's recipe: a neuron opens it; "load" puts the recipe back into the rack (its neurons at those doses, the rest muted)
+function renderHistory() {
+  const el = $("#c-thread"), cur = chats.includes(chat) ? chat.id : null;
+  el.innerHTML = `<div class="c-hist">${chats.length ? chats.map(c => {
+    const n = Object.keys(c.nodes).length - 1, br = branchCount(c);
+    return `<div class="c-histrow${c.id === cur ? " on" : ""}" data-c="${c.id}"><button type="button" class="open"><span class="t">${esc(c.title || "—")}</span><span class="m">${agoMs(c.t)} · ${n} message${n === 1 ? "" : "s"}${br ? ` · ${br} branch${br === 1 ? "" : "es"}` : ""}</span></button><button type="button" class="del" aria-label="delete chat" title="delete">×</button></div>`;
+  }).join("") : `<div class="c-empty dim">No chats yet.</div>`}</div>`;
+}
+function renderThread() {
+  state.thread = pathOf(chat);
+  $("#c-history").classList.toggle("on", showHistory);
+  $("#c-export").disabled = !state.thread.some(t => !t.live && (t.reply || t.error));
+  if (showHistory) return renderHistory();
+  const el = $("#c-thread");
+  el.innerHTML = state.thread.length ? state.thread.map(turnHTML).join("")
+    : `<div class="c-empty dim">Set the dials below, then send a message. Every reply is generated with the steering shown above it.</div>`;
+  el.scrollTop = el.scrollHeight;
+  const ta = el.querySelector(".t-edit"); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); ta.style.height = `${ta.scrollHeight}px`; }
+}
+function openChat(c) {
+  if (running) running.abort();
+  chat = c; editing = null; showHistory = false;
+  try { localStorage.setItem(OPEN_KEY, c.id); } catch {}
+  renderThread();
+}
+// a new message under `parentId` (root for the first): becomes the shown branch and streams its reply, steered by the rack
+async function generate(parentId, text) {
+  if (running) running.abort();
+  const c = chat, parent = c.nodes[parentId];
+  const history = pathOf(c, parentId).filter(t => !t.error).map(t => ({ user: t.user, reply: t.reply }));
+  const neurons = steerBody();
+  const turn = { id: uid(), parent: parentId, kids: [], sel: 0, user: text, reply: "", neurons, live: true };
+  c.nodes[turn.id] = turn; parent.kids.push(turn.id); parent.sel = parent.kids.length - 1;
+  if (!c.title) c.title = text.slice(0, 80);
+  c.t = Date.now(); editing = null; showHistory = false; saveChats(); renderThread();
+  const ctl = new AbortController();
+  running = ctl; $("#c-go").textContent = "stop"; $("#c-go").classList.add("stop");
+  try {
+    const res = await fetch("/api/steer", { method: "POST", headers: { "Content-Type": "application/json" }, signal: ctl.signal,
+      body: JSON.stringify({ neurons, prompt: text, history }) });
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 160)}`);
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let k;
+      while ((k = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, k); buf = buf.slice(k + 2);
+        if (!line.startsWith("data: ")) continue;
+        const ev = JSON.parse(line.slice(6));
+        if (ev.error) turn.error = ev.error;
+        if (ev.row == null) continue;
+        turn.reply += ev.t;
+        const out = chat === c && !showHistory && $(`#c-thread .turn[data-id="${turn.id}"] .reply`);
+        if (out) { out.textContent = turn.reply; const th = $("#c-thread"); if (th.scrollHeight - th.scrollTop - th.clientHeight < 80) th.scrollTop = th.scrollHeight; }
+      }
+    }
+  } catch (err) {
+    if (err.name !== "AbortError") turn.error = String(err);
+  } finally {
+    turn.live = false;
+    if (running === ctl) { running = null; $("#c-go").textContent = state.chat.dir === "reads" ? "read" : "send"; $("#c-go").classList.remove("stop"); }
+    saveChats();
+    if (chat === c && !showHistory) {
+      // an open edit box elsewhere survives: only this turn is redrawn
+      const el = editing && $(`#c-thread .turn[data-id="${turn.id}"]`);
+      if (el) el.outerHTML = turnHTML(turn); else if (!editing) renderThread();
+    }
+  }
+}
+const nodeAt = el => chat.nodes[el.closest(".turn")?.dataset.id];
 $("#c-thread").addEventListener("click", e => {
+  const row = e.target.closest(".c-histrow");
+  if (row) {
+    const c = chats.find(x => x.id === row.dataset.c);
+    if (e.target.closest(".del")) {
+      chats = chats.filter(x => x !== c);
+      if (c === chat) { if (running) running.abort(); chat = blankChat(); }
+      saveChats(); renderThread();
+    } else if (c) openChat(c);
+    return;
+  }
+  // a turn's recipe: a neuron opens it; "load" puts the recipe back into the rack (its neurons at those doses, the rest muted)
   const rc = e.target.closest(".recipe .rc[data-l]");
   if (rc) { const l = +rc.dataset.l, n = +rc.dataset.n; if (!isFocus(l, n, "neuron")) openNeuron(l, n); return; }
-  const b = e.target.closest(".recipe .load"); if (!b) return;
-  const t = state.thread[+b.closest(".turn").dataset.i];
-  for (const k of state.chat.rack) k.on = false;
-  for (const x of t.neurons) {
-    let k = knobOf(x.layer, x.n);
-    if (!k) { addKnob(x.layer, x.n); k = knobOf(x.layer, x.n); }
-    k.on = true; k.mode = x.mode; k.v[x.mode] = x.dose;
+  if (e.target.closest(".recipe .load")) {
+    const t = nodeAt(e.target);
+    for (const k of state.chat.rack) k.on = false;
+    for (const x of t.neurons) {
+      let k = knobOf(x.layer, x.n);
+      if (!k) { addKnob(x.layer, x.n); k = knobOf(x.layer, x.n); }
+      k.on = true; k.mode = x.mode; k.v[x.mode] = x.dose;
+    }
+    saveRack(); renderRack(); return;
   }
-  saveRack(); renderRack();
+  const b = e.target.closest(".t-ctl button, .t-nav button"); if (!b) return;
+  const t = nodeAt(b), act = b.dataset.act;
+  if (act === "prev" || act === "next") { const p = chat.nodes[t.parent]; p.sel = p.kids.indexOf(t.id) + (act === "next" ? 1 : -1); saveChats(); renderThread(); }
+  else if (act === "edit") { editing = t.id; renderThread(); }
+  else if (act === "cancel") { editing = null; renderThread(); }
+  else if (act === "resend") { const v = b.closest(".turn").querySelector(".t-edit").value.trim(); if (v) generate(t.parent, v); }
+  else if (act === "retry") generate(t.parent, t.user);
+  else if (act === "copy") { navigator.clipboard?.writeText(t.reply); b.textContent = "copied"; setTimeout(() => { b.textContent = "copy"; }, 1200); }
+  else if (act === "branch") {
+    const c = blankChat(); c.title = `${chat.title || t.user.slice(0, 80)} ⑂`;
+    let parent = "root";
+    for (const x of pathOf(chat, t.id)) {
+      const n = { ...structuredClone(x), id: uid(), parent, kids: [], sel: 0, live: false };
+      c.nodes[n.id] = n; c.nodes[parent].kids.push(n.id); parent = n.id;
+    }
+    openChat(c); saveChats();
+  }
 });
-$("#c-clear").onclick = () => { if (running) running.abort(); state.thread = []; renderThread(); };
+$("#c-thread").addEventListener("keydown", e => {
+  if (!e.target.matches(".t-edit")) return;
+  if (e.key === "Escape") { editing = null; renderThread(); }
+  else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = e.target.value.trim(); if (v) generate(nodeAt(e.target).parent, v); }
+});
+$("#c-thread").addEventListener("input", e => { if (e.target.matches(".t-edit")) { e.target.style.height = "auto"; e.target.style.height = `${e.target.scrollHeight}px`; } });
+$("#c-clear").onclick = () => { if (chat.nodes.root.kids.length || showHistory) openChat(blankChat()); };
+$("#c-history").onclick = () => { showHistory = !showHistory; editing = null; renderThread(); };
 // export: a small menu of formats; the model name comes from the server, so the JSON's "model" is the one that answered
 let chatModel = "Qwen/Qwen3.5-4B";
 api("/api/agent/overview").then(o => { if (o.model) chatModel = o.model; }).catch(() => {});
@@ -954,40 +1088,9 @@ $("#c-form").addEventListener("submit", async e => {
     if (f && f.kind === "neuron") runReads(f, text); else $("#c-reads").textContent = "Open a neuron to see how it reads your text.";
     return;
   }
-  const neurons = steerBody();
-  const history = state.thread.filter(t => !t.error).map(t => ({ user: t.user, reply: t.reply }));
-  const turn = { user: text, reply: "", neurons, live: true };
-  state.thread.push(turn); $("#c-input").value = ""; renderThread();
-  const out = $("#c-thread").lastElementChild.querySelector(".reply");
-  const ctl = new AbortController(), thread = state.thread;
-  running = ctl; $("#c-go").textContent = "stop"; $("#c-go").classList.add("stop");
-  try {
-    const res = await fetch("/api/steer", { method: "POST", headers: { "Content-Type": "application/json" }, signal: ctl.signal,
-      body: JSON.stringify({ neurons, prompt: text, history }) });
-    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 160)}`);
-    const reader = res.body.getReader(), dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { value, done } = await reader.read(); if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let k;
-      while ((k = buf.indexOf("\n\n")) >= 0) {
-        const line = buf.slice(0, k); buf = buf.slice(k + 2);
-        if (!line.startsWith("data: ")) continue;
-        const ev = JSON.parse(line.slice(6));
-        if (ev.error) turn.error = ev.error;
-        if (ev.row == null) continue;
-        turn.reply += ev.t; out.textContent = turn.reply;
-        const th = $("#c-thread"); if (th.scrollHeight - th.scrollTop - th.clientHeight < 80) th.scrollTop = th.scrollHeight;
-      }
-    }
-  } catch (err) {
-    if (err.name !== "AbortError") turn.error = String(err);
-  } finally {
-    turn.live = false;
-    if (running === ctl) { running = null; $("#c-go").textContent = "send"; $("#c-go").classList.remove("stop"); }
-    if (state.thread === thread) renderThread();
-  }
+  $("#c-input").value = "";
+  const last = state.thread[state.thread.length - 1];
+  generate(last ? last.id : "root", text);
 });
 
 async function runReads(f, text) {
